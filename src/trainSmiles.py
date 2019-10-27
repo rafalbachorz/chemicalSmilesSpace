@@ -448,14 +448,14 @@ def scaleFeatures(staticFeatures):
 
     return scaler.transform(staticFeatures, ), scaler
 
-def trainModel(dynamicFeatures, staticFeatures, modelFile, nEpoch, nBatch):
+def trainModel(dynamicFeatures, staticFeatures, aeDimensions, modelFile, nEpoch, nBatch):
     lr = 0.001
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
     nStatic = staticFeatures.shape[1]
 
-    encoder = prepareEncoder(nCharInSmiles, nCharSet, nStatic, [64,64,64,64,32], lr, ['binary_crossentropy', 'mean_absolute_error'], True)
-    decoder = prepareDecoder(nCharInSmiles, nCharSet, nStatic, [64,64,64,64,32], lr, ['binary_crossentropy', 'mean_absolute_error'], True)
+    encoder = prepareEncoder(nCharInSmiles, nCharSet, nStatic, aeDimensions, lr, ['binary_crossentropy', 'mean_absolute_error'], True)
+    decoder = prepareDecoder(nCharInSmiles, nCharSet, nStatic, aeDimensions, lr, ['binary_crossentropy', 'mean_absolute_error'], True)
     encoderOutput = encoder.get_layer('encoderOutput').output
     decoderOutput = decoder(encoderOutput)
     autoencoder = Model(inputs=encoder.input, outputs=decoderOutput)
@@ -516,10 +516,12 @@ if __name__ == '__main__':
     chosenFeatures = ['full_mwt', 'heavy_atoms', 'smiles_length']
     staticFeaturesSlice = staticFeatures[chosenFeatures]
     staticFeaturesSliceScaled, scaler = scaleFeatures(staticFeaturesSlice)
-    model, history = trainModel(dynamicFeatures, staticFeaturesSliceScaled, args.modelFile, args.nEpoch, args.nBatch)
+    aeDimensions = [64,64,64,64,32]
+    model, history = trainModel(dynamicFeatures, staticFeaturesSliceScaled, aeDimensions, args.modelFile, args.nEpoch, args.nBatch)
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
     nStatic = staticFeaturesSlice.shape[1]
-    predictiveModel = predictiveModel(model, history, nCharInSmiles, nCharSet, nStatic, scaler, char2indices, indices2char)
+    nLatent = aeDimensions[-1]
+    predictiveModel = predictiveModel(model, history, nCharInSmiles, nCharSet, nStatic, nLatent, scaler, char2indices, indices2char)
     with open(args.completeModel, 'wb') as f:
         pickle.dump(predictiveModel, file=f)

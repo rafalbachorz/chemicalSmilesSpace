@@ -473,6 +473,7 @@ if __name__ == '__main__':
     import argparse
     #from tabulate import tabulate
     from pathlib import Path
+    from predictiveModel import predictiveModel
 
     parser = argparse.ArgumentParser(
         description='OpenMM simulation.',
@@ -481,6 +482,7 @@ if __name__ == '__main__':
         )
 
     parser.add_argument('-modelFile', action='store', dest='modelFile', required=False, type=str, help='Resulting model file')
+    parser.add_argument('-completeModel', action='store', dest='completeModel', required=False, type=str, help='Resulting model file')
     parser.add_argument('-v', '--version', action='version', version='parseAutoDockFiles.py v. 1.0')
 
     args = parser.parse_args()
