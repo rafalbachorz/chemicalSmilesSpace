@@ -127,6 +127,56 @@ def prepareModelOnlyDynamic(dynamicDim, k, lr, lossFunction, showArch):
         print(model.summary())
     return model
 
+def prepareEncoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
+
+    input_dynamic = Input(shape=(nCharInSmiles, nCharSet), name="inputDynamic")
+    encoder, state_h, state_c = LSTM(k[0], return_sequences=True, return_state=True)(input_dynamic)
+
+    for x in k[1:-1]:
+        encoder, state_h, state_c = LSTM(x, return_sequences=True, return_state=True)(encoder)
+    
+    x = k[-1]
+    #states = concatenate([state_h, state_c])
+    encoder, state_h, state_c = LSTM(k[-2], return_sequences=False, return_state=True)(encoder)
+    bottleneck = Dense(x, activation="relu", name='encoderOutput')(encoder)
+    #encoder, state_h, state_c = LSTM(x, return_state=True)(encoder)
+    #concat = concatenate([encoder, latent])
+
+    # autoencoder
+    #z_mean = Dense(x, name='z_mean')(encoder)
+    #z_log_var = Dense(x, name='z_log_var')(encoder)
+    
+    #z = Lambda(sampling, output_shape=(x,), name='encoderOutput')([z_mean, z_log_var])
+
+    model = Model(inputs=[input_dynamic], outputs=[bottleneck])
+    if (showArch):
+        print(model.summary())
+
+    return model
+
+def prepareDecoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
+    decoderInput = Input(shape=(k[-1],), name="decoderInput")
+
+    state_h_decoded  = Dense(k[-2], activation="relu")(decoderInput)
+    state_c_decoded  = Dense(k[-2], activation="relu")(decoderInput)
+    encoder_states = [state_h_decoded, state_c_decoded]
+
+    decoder = RepeatVector(nCharInSmiles, name='repeat')(decoderInput)
+    decoder, state_h, state_c = LSTM(k[-2], return_sequences=True, return_state=True)(decoder, initial_state=encoder_states)
+    for x in np.flip(k[:-1]):
+        decoder, state_h, state_c = LSTM(x, return_sequences=True, return_state=True)(decoder)
+
+    #result_series = TimeDistributed(Dense(charsetLen))(lstm_layer)
+    resultDynamic = TimeDistributed(Dense(nCharSet))(decoder)
+    #resultDynamic = LSTM(nCharSet, activation='softmax', name = 'outputDynamic')(decoder)
+    
+    model = Model(inputs=[decoderInput], outputs=[resultDynamic])
+    if (showArch):
+        print(model.summary())
+
+    return model
+
+
 def prepareEncoder(nCharInSmiles, nCharSet, nStatic, k, lr, lossFunction, showArch):
 
     input_dynamic = Input(shape=(nCharInSmiles, nCharSet), name="inputDynamic")
@@ -297,13 +347,13 @@ def fit(staticFeatures, dynamicFeatures, model, step=1):
                                     [testing_dynamic, testing_static]))
 
 
-def fitOnlyDynamic(dynamicFeatures, model, step=1):
+def fitOnlyDynamic(dynamicFeatures, model, modelFilePath, nEpoch, nBatch):
 
     order = rnd.permutation(len(staticFeatures))
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=5)
     bst_model_path = 'autoencoder.h5'
-    checkpoint = ModelCheckpoint(bst_model_path, save_best_only=True, save_weights_only=True, monitor='val_loss')
+    checkpoint = ModelCheckpoint(modelFilePath, save_best_only=True, save_weights_only=True, monitor='val_loss')
 
     size = int(dynamicFeatures.shape[0] * 0.9)
     training_dynamic = dynamicFeatures[order[:size]]
@@ -312,8 +362,8 @@ def fitOnlyDynamic(dynamicFeatures, model, step=1):
     print(testing_dynamic.shape)
     model.fit(training_dynamic,
               training_dynamic,
-                   epochs=10,
-                   batch_size=64,
+                   epochs=nEpoch,
+                   batch_size=nBatch,
                    callbacks=[early_stopping, checkpoint],
                    validation_data=(testing_dynamic, 
                                     testing_dynamic))
@@ -449,7 +499,7 @@ def scaleFeatures(staticFeatures):
     return scaler.transform(staticFeatures, ), scaler
 
 def trainModel(dynamicFeatures, staticFeatures, aeDimensions, modelFile, nEpoch, nBatch):
-    lr = 0.001
+    lr = 0.01
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
     nStatic = staticFeatures.shape[1]
@@ -461,14 +511,31 @@ def trainModel(dynamicFeatures, staticFeatures, aeDimensions, modelFile, nEpoch,
     autoencoder = Model(inputs=encoder.input, outputs=decoderOutput)
 
     optimizer = RMSprop(lr=lr)
-    autoencoder.compile(optimizer=optimizer, loss=['binary_crossentropy', 'mean_absolute_error'], metrics=['binary_crossentropy', 'mean_absolute_error'])
+    autoencoder.compile(optimizer=optimizer, loss=['categorical_crossentropy', 'mean_absolute_error'], metrics=['binary_crossentropy', 'mean_absolute_error', 'accuracy'])
 
     print(autoencoder.summary())
     #model = prepareModelDynamicStatic(dynamicFeatures.shape, staticFeatures.shape, [64,64,64,32], lr, ['binary_crossentropy', 'mean_absolute_error'], True)
     model, history = fitDynamicStatic(dynamicFeatures, staticFeatures, autoencoder, modelFile, nEpoch, nBatch)
     return model, history
 
+def trainModelDynamic(dynamicFeatures, aeDimensions, modelFile, nEpoch, nBatch):
+    lr = 0.01
+    nCharInSmiles = dynamicFeatures.shape[1]
+    nCharSet = dynamicFeatures.shape[2]
 
+    encoder = prepareEncoderDynamic(nCharInSmiles, nCharSet, aeDimensions, lr, True)
+    decoder = prepareDecoderDynamic(nCharInSmiles, nCharSet, aeDimensions, lr, True)
+    encoderOutput = encoder.get_layer('encoderOutput').output
+    decoderOutput = decoder(encoderOutput)
+    autoencoder = Model(inputs=encoder.input, outputs=decoderOutput)
+
+    optimizer = RMSprop(lr=lr)
+    autoencoder.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['categorical_crossentropy', 'mean_absolute_error', 'accuracy'])
+
+    print(autoencoder.summary())
+    #model = prepareModelDynamicStatic(dynamicFeatures.shape, staticFeatures.shape, [64,64,64,32], lr, ['binary_crossentropy', 'mean_absolute_error'], True)
+    model, history = fitOnlyDynamic(dynamicFeatures, autoencoder, modelFile, nEpoch, nBatch)
+    return model, history
 
 
 
@@ -477,7 +544,7 @@ if __name__ == '__main__':
     import argparse
     #from tabulate import tabulate
     from pathlib import Path
-    from predictiveModel import predictiveModel
+    import predictiveModel 
 
     parser = argparse.ArgumentParser(
         description='OpenMM simulation.',
@@ -486,7 +553,7 @@ if __name__ == '__main__':
         )
 
     parser.add_argument('-dataFile', action='store', dest='dataFile', required=True, type=str, help='System name')
-    parser.add_argument('-modelFile', action='store', dest='modelFile', required=False, type=str, help='Resulting model file')
+    parser.add_argument('-modelWeightsFile', action='store', dest='modelWeightsFile', required=False, type=str, help='Resulting model file')
     parser.add_argument('-completeModel', action='store', dest='completeModel', required=False, type=str, help='Resulting model file')
     parser.add_argument('-nSample', action='store', dest='nSample', default=50000, type=int, help='Sample size')
     parser.add_argument('-nBatch', action='store', dest='nBatch', default=256, type=int, help='Batch size')
@@ -516,12 +583,12 @@ if __name__ == '__main__':
     chosenFeatures = ['full_mwt', 'heavy_atoms', 'smiles_length']
     staticFeaturesSlice = staticFeatures[chosenFeatures]
     staticFeaturesSliceScaled, scaler = scaleFeatures(staticFeaturesSlice)
-    aeDimensions = [64,64,64,64,32]
-    model, history = trainModel(dynamicFeatures, staticFeaturesSliceScaled, aeDimensions, args.modelFile, args.nEpoch, args.nBatch)
+    aeDimensions = [64,64,32]
+    #model, history = trainModel(dynamicFeatures, staticFeaturesSliceScaled, aeDimensions, args.modelWeightsFile, args.nEpoch, args.nBatch)
+    model, history = trainModelDynamic(dynamicFeatures, aeDimensions, args.modelWeightsFile, args.nEpoch, args.nBatch)
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
     nStatic = staticFeaturesSlice.shape[1]
     nLatent = aeDimensions[-1]
-    predictiveModel = predictiveModel(model, history, nCharInSmiles, nCharSet, nStatic, nLatent, scaler, char2indices, indices2char)
-    with open(args.completeModel, 'wb') as f:
-        pickle.dump(predictiveModel, file=f)
+    predictiveModel.picklePredictiveModel(args.modelWeightsFile, nCharInSmiles, nCharSet, nStatic, nLatent, scaler, char2indices, indices2char, args.completeModel)
+

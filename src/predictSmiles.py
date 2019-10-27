@@ -461,7 +461,9 @@ def loadDecoder(nCharInSmiles, nCharSet, nStatic, modelFile):
 
     return decoder
 
+
 def predictStaticDynamic(decoder):
+
     latentVector = [random.random() for iii in range(32)]
     latentVector = np.array(latentVector).reshape(-1, 32)
     
@@ -473,7 +475,7 @@ if __name__ == '__main__':
     import argparse
     #from tabulate import tabulate
     from pathlib import Path
-    from predictiveModel import predictiveModel
+    import predictiveModel
 
     parser = argparse.ArgumentParser(
         description='OpenMM simulation.',
@@ -482,14 +484,18 @@ if __name__ == '__main__':
         )
 
     parser.add_argument('-modelFile', action='store', dest='modelFile', required=False, type=str, help='Resulting model file')
-    parser.add_argument('-completeModel', action='store', dest='completeModel', required=False, type=str, help='Resulting model file')
+    parser.add_argument('-modelMetaInformation', action='store', dest='modelMetaInformation', required=False, type=str, help='Resulting model file')
     parser.add_argument('-v', '--version', action='version', version='parseAutoDockFiles.py v. 1.0')
 
     args = parser.parse_args()
+    predictiveModel = predictiveModel.unpicklePredictiveModel(args.modelMetaInformation)
 
-    nCharInSmiles = 60
-    nCharSet = 27
-    nStatic = 3
+#    with open('predictiveModel646432_20191027.pckl') as f:
+#        predictiveModel = pickle.load(f)
+
+    nCharInSmiles = predictiveModel['nCharSmiles']
+    nCharSet = predictiveModel['nCharSet']
+    nStatic = predictiveModel['nStatic']
     decoder = loadDecoder(nCharInSmiles, nCharSet, nStatic, args.modelFile)
     prediction = predictStaticDynamic(decoder)
 
