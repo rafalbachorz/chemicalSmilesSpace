@@ -10,15 +10,19 @@ from sklearn.preprocessing import StandardScaler
 import os
 os.chdir('/home/rafalb/work/molecules/chemicalSmilesSpace/src')
 
-from keras.layers import LSTM, TimeDistributed, concatenate, Input, Dense, RepeatVector, Lambda
-from keras.models import Model
-from keras.activations import relu, sigmoid, tanh
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-from keras.optimizers import Adam, RMSprop
-import keras.backend as K
-from keras.utils import plot_model
-from keras import losses
+from tensorflow.keras.layers import LSTM, TimeDistributed, concatenate, Input, Dense, RepeatVector, Lambda,  Convolution1D, Flatten, GRU, BatchNormalization, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.activations import relu, sigmoid, tanh
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.optimizers import Adam, RMSprop
+import tensorflow.keras.backend as K
+from tensorflow.keras.utils import plot_model
+from tensorflow.keras import losses
+from tensorflow.keras.losses import binary_crossentropy
 import numpy.random as rnd
+
+from trainHistory import trainHistory
+import datetime
 
 def sampling(args):
     z_mean, z_log_var = args
@@ -127,7 +131,9 @@ def prepareModelOnlyDynamic(dynamicDim, k, lr, lossFunction, showArch):
         print(model.summary())
     return model
 
-def prepareEncoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
+
+
+def prepareEncoderDynamic(nCharInSmiles, nCharSet, k, lr, variational, showArch):
 
     input_dynamic = Input(shape=(nCharInSmiles, nCharSet), name="inputDynamic")
     encoder, state_h, state_c = LSTM(k[0], return_sequences=True, return_state=True)(input_dynamic)
@@ -135,24 +141,81 @@ def prepareEncoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
     for x in k[1:-1]:
         encoder, state_h, state_c = LSTM(x, return_sequences=True, return_state=True)(encoder)
     
-    x = k[-1]
+    
     #states = concatenate([state_h, state_c])
-    encoder, state_h, state_c = LSTM(k[-2], return_sequences=False, return_state=True)(encoder)
-    bottleneck = Dense(x, activation="relu", name='encoderOutput')(encoder)
-    #encoder, state_h, state_c = LSTM(x, return_state=True)(encoder)
-    #concat = concatenate([encoder, latent])
+    #encoder, state_h, state_c = LSTM(k[-2], return_sequences=False, return_state=True)(encoder)
+
+    x = k[-1]
+    encoder, state_h, state_c = LSTM(x, return_state=True, return_sequences=False)(encoder)
+    concat = concatenate([encoder, state_h])
+    output = Dense(x, activation='relu')(concat)
+    #concat = concatenate([concat, encoder])
 
     # autoencoder
-    #z_mean = Dense(x, name='z_mean')(encoder)
-    #z_log_var = Dense(x, name='z_log_var')(encoder)
-    
-    #z = Lambda(sampling, output_shape=(x,), name='encoderOutput')([z_mean, z_log_var])
+    if (variational):
+        #z_mean = Dense(x, name='z_mean')(encoder)
+        #z_log_var = Dense(x, name='z_log_var')(encoder)
+        z_mean = Dense(x, name='z_mean')(output)
+        z_log_var = Dense(x, name='z_log_var')(output)
+        z = Lambda(sampling, output_shape=(x,), name='encoderOutput')([z_mean, z_log_var])
+        z = Dense(x, activation='relu')(z)
+        def vae_loss(x, x_decoded_mean):
+            x = K.flatten(x)
+            x_decoded_mean = K.flatten(x_decoded_mean)
+            xent_loss = nCharInSmiles * binary_crossentropy(x, x_decoded_mean)
+            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis = -1)
+            return xent_loss + kl_loss
+    else:
+        z = Dense(x, activation="relu", name='encoderOutput')(encoder)
+        vae_loss = None
 
-    model = Model(inputs=[input_dynamic], outputs=[bottleneck])
+
+
+    model = Model(inputs=[input_dynamic], outputs=[z])
     if (showArch):
         print(model.summary())
 
-    return model
+    return model, vae_loss
+
+def prepareEncoderCNNDynamic(nCharInSmiles, nCharSet, k, lr, variational, showArch):
+
+    convDefinition = k[0]
+    input_dynamic = Input(shape=(nCharInSmiles, nCharSet), name="inputDynamic")
+    h = Convolution1D(convDefinition['initialDimWidth'], convDefinition['initialDimDepth'], activation = 'relu', name='conv_0')(input_dynamic)
+
+    for iLayer in range(convDefinition['nCNNlayers'] - 1):
+        iWidth = int(convDefinition['initialDimDepth'] * convDefinition['expansionCoeff'] ** iLayer)
+        iDepth = int(convDefinition['initialDimDepth'] * convDefinition['expansionCoeff'] ** iLayer)
+        h = Convolution1D(iWidth, iDepth, activation = 'relu', name='conv_'+str(iLayer+1))(h)
+        #h = Dropout(0.1)(h)
+        h = BatchNormalization()(h)
+
+    h = Flatten(name='flatten_1')(h)
+    output = Dense(k[1], activation = 'relu', name='dense_1')(h)
+
+    # autoencoder
+    if (variational):
+        #z_mean = Dense(x, name='z_mean')(encoder)
+        #z_log_var = Dense(x, name='z_log_var')(encoder)
+        z_mean = Dense(k[1], name='z_mean')(output)
+        z_log_var = Dense(k[1], name='z_log_var')(output)
+        z = Lambda(sampling, output_shape=(k[1],), name='encoderOutput')([z_mean, z_log_var])
+        def vae_loss(x, x_decoded_mean):
+            x = K.flatten(x)
+            x_decoded_mean = K.flatten(x_decoded_mean)
+            xent_loss = nCharInSmiles * objectives.binary_crossentropy(x, x_decoded_mean)
+            kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis = -1)
+            return xent_loss + kl_loss
+    else:
+        z = Dense(k[1], activation="relu", name='encoderOutput')(output)
+        vae_loss = None
+
+
+    model = Model(inputs=[input_dynamic], outputs=[z])
+    if (showArch):
+        print(model.summary())
+
+    return model, vae_loss 
 
 def prepareDecoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
     decoderInput = Input(shape=(k[-1],), name="decoderInput")
@@ -167,7 +230,7 @@ def prepareDecoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
         decoder, state_h, state_c = LSTM(x, return_sequences=True, return_state=True)(decoder)
 
     #result_series = TimeDistributed(Dense(charsetLen))(lstm_layer)
-    resultDynamic = TimeDistributed(Dense(nCharSet))(decoder)
+    resultDynamic = TimeDistributed(Dense(nCharSet, activation='softmax'))(decoder)
     #resultDynamic = LSTM(nCharSet, activation='softmax', name = 'outputDynamic')(decoder)
     
     model = Model(inputs=[decoderInput], outputs=[resultDynamic])
@@ -176,6 +239,38 @@ def prepareDecoderDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
 
     return model
 
+def prepareDecoderCNNDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
+    decoderInput = Input(shape=(k[0],), name="decoderInput")
+
+    h = Dense(k[0], name='latent_input', activation = 'relu')(decoderInput)
+    h = RepeatVector(nCharInSmiles, name='repeat_vector')(h)
+    for idx, iLayer in enumerate(k[1:]):
+        h = GRU(iLayer, return_sequences = True, name='gru_'+str(idx))(h)
+        #h = Dropout(0.1)(h)
+ 
+    resultDynamic = TimeDistributed(Dense(nCharSet, activation='softmax'), name='decoded_mean')(h)
+    
+    model = Model(inputs=[decoderInput], outputs=[resultDynamic])
+    if (showArch):
+        print(model.summary())
+
+    return model
+
+def prepareDecoderCNN_LSTMDynamic(nCharInSmiles, nCharSet, k, lr, showArch):
+    decoderInput = Input(shape=(k[0],), name="decoderInput")
+
+    h = Dense(k[0], name='latent_input', activation = 'relu')(decoderInput)
+    h = RepeatVector(nCharInSmiles, name='repeat_vector')(h)
+    for idx, iLayer in enumerate(k[1:]):
+        h = LSTM(iLayer, return_sequences = True, name='lstm_'+str(idx))(h)
+ 
+    resultDynamic = TimeDistributed(Dense(nCharSet, activation='softmax'), name='decoded_mean')(h)
+    
+    model = Model(inputs=[decoderInput], outputs=[resultDynamic])
+    if (showArch):
+        print(model.summary())
+
+    return model
 
 def prepareEncoder(nCharInSmiles, nCharSet, nStatic, k, lr, lossFunction, showArch):
 
@@ -347,26 +442,30 @@ def fit(staticFeatures, dynamicFeatures, model, step=1):
                                     [testing_dynamic, testing_static]))
 
 
-def fitOnlyDynamic(dynamicFeatures, model, modelFilePath, nEpoch, nBatch):
-
+def fitOnlyDynamic(dynamicFeatures, model, modelFilePath, nEpoch, nBatch, iniLR):
+    dtime = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     order = rnd.permutation(len(staticFeatures))
 
-    early_stopping = EarlyStopping(monitor='val_loss', patience=5)
-    bst_model_path = 'autoencoder.h5'
-    checkpoint = ModelCheckpoint(modelFilePath, save_best_only=True, save_weights_only=True, monitor='val_loss')
+    early_stopping = EarlyStopping(monitor='val_loss', patience=10)
+    checkpoint = ModelCheckpoint(modelFilePath, save_best_only=True, save_weights_only=False, monitor='val_loss')
 
     size = int(dynamicFeatures.shape[0] * 0.9)
     training_dynamic = dynamicFeatures[order[:size]]
     testing_dynamic = dynamicFeatures[order[size:]]
     print(training_dynamic.shape)
     print(testing_dynamic.shape)
-    model.fit(training_dynamic,
+
+    optimizationEvolution = trainHistory(iniLR, 0.5, 20, dtime)
+
+    history = model.fit(training_dynamic,
               training_dynamic,
                    epochs=nEpoch,
                    batch_size=nBatch,
+                   #callbacks=[early_stopping, checkpoint, optimizationEvolution],
                    callbacks=[early_stopping, checkpoint],
                    validation_data=(testing_dynamic, 
                                     testing_dynamic))
+    return model, history
 
 def fitDynamicStatic(dynamicFeatures, staticFeatures, model, modelFilePath, nEpoch, nBatch):
     order = rnd.permutation(len(staticFeatures))
@@ -399,48 +498,55 @@ def pad_smile(string, max_len, padding='right'):
         elif padding == 'none':
             return string
 
-def prepareData(dataFile, nSample, doPlot = False):
+def prepareData(dataFile, nSample, minNsmiles, maxMsmiles, doPlot = False):
 
     with open(dataFile, 'rb') as file:
         molDataGroupedChosen = pickle.load(file)
 
     #nSmilesCodes = 200000
     nSmilesMore = np.min([molDataGroupedChosen.shape[0], int(1.2*nSample)])
-    mask = random.randint(0, molDataGroupedChosen.shape[0], size = nSmilesMore)
+    #mask = random.randint(0, molDataGroupedChosen.shape[0], size = nSmilesMore)
     #mask = random.randint(0, molDataGroupedChosen.shape[0], size=nSmilesCodes)
     mask = molDataGroupedChosen.index
     staticFeatures = pd.DataFrame()
-    toBeAveraged = ['standard_value', 'alogp', 'hba', 'hbd', 'psa', 'rtb', 'full_mwt', 'qed_weighted']
-    for quantity in toBeAveraged:
-        staticFeatures.loc[:, quantity] = (molDataGroupedChosen.loc[mask, (quantity, 'min')] + molDataGroupedChosen.loc[mask, (quantity, 'max')])/2
-        staticFeatures.loc[:, quantity].astype(float)
-    toBeTaken = ['aromatic_rings', 'heavy_atoms']
-    for quantity in toBeTaken:
-        staticFeatures.loc[:, quantity] = molDataGroupedChosen.loc[mask, (quantity, 'min')]
-        staticFeatures.loc[:, quantity].astype(float)
-    staticFeatures.loc[:, 'number_of_rings'] = molDataGroupedChosen.loc[mask, 'numberOfRings'].astype(float)
+    #toBeAveraged = ['standard_value', 'alogp', 'hba', 'hbd', 'psa', 'rtb', 'full_mwt', 'qed_weighted']
+    #for quantity in toBeAveraged:
+    #    staticFeatures.loc[:, quantity] = (molDataGroupedChosen.loc[mask, (quantity, 'min')] + molDataGroupedChosen.loc[mask, (quantity, 'max')])/2
+    #    staticFeatures.loc[:, quantity].astype(float)
+    #toBeTaken = ['aromatic_rings', 'heavy_atoms']
+    #for quantity in toBeTaken:
+    #    staticFeatures.loc[:, quantity] = molDataGroupedChosen.loc[mask, (quantity, 'min')]
+    #    staticFeatures.loc[:, quantity].astype(float)
 
-    staticFeatures['full_mwt'] = staticFeatures.full_mwt.astype(float)
-    staticFeatures['qed_weighted'] = staticFeatures.qed_weighted.astype(float)
-    staticFeatures['aromatic_rings'] = staticFeatures.aromatic_rings.astype(float)
-    staticFeatures['smiles_length'] = molDataGroupedChosen.loc[staticFeatures.index, 'canonicalSmiles'].apply(lambda x: len(x))
+
+    staticFeatures.loc[:, 'hba'] = molDataGroupedChosen.loc[:, 'HBacceptors'].astype(float)
+    staticFeatures.loc[:, 'hbd'] = molDataGroupedChosen.loc[:, 'HBdonors'].astype(float)
+    staticFeatures.loc[:, 'number_of_rings'] = molDataGroupedChosen.loc[:, 'numberOfRings'].astype(float)
+    staticFeatures.loc[:, 'full_mwt'] = molDataGroupedChosen.loc[:, 'fullMolecularWeight'].astype(float)
+    staticFeatures.loc[:, 'qed_weighted'] = molDataGroupedChosen.loc[:, 'QEDweighted'].astype(float)
+    staticFeatures.loc[:, 'aromatic_rings'] = molDataGroupedChosen.loc[:, 'aromaticRings'].astype(float)
+    staticFeatures.loc[:, 'alogp'] = molDataGroupedChosen.loc[:, 'alogP'].astype(float)
+    staticFeatures.loc[:, 'psa'] = molDataGroupedChosen.loc[:, 'polarSurface'].astype(float)
+    staticFeatures.loc[:, 'smiles_length'] = molDataGroupedChosen.loc[:, 'canonicalSmilesLength'].astype(float)
 
 
     # Remove rows with nans
     staticFeatures = staticFeatures.dropna()
 
     # Filter the smiles from given length range
-    staticFeatures = staticFeatures[(staticFeatures['smiles_length'] >= 40) & (staticFeatures['smiles_length'] <= 60)]
+    staticFeatures = staticFeatures[(staticFeatures['smiles_length'] >= minNsmiles) & (staticFeatures['smiles_length'] <= maxMsmiles)]
 
-    thres = 100000
-    print(staticFeatures[staticFeatures['standard_value'] < thres].shape[0] / staticFeatures['standard_value'].shape[0])
+    #thres = 100000
+    #print(staticFeatures[staticFeatures['standard_value'] < thres].shape[0] / staticFeatures['standard_value'].shape[0])
 
-    staticFeatures = staticFeatures[staticFeatures['standard_value'] < thres]
+    #staticFeatures = staticFeatures[staticFeatures['standard_value'] < thres]
 
     staticFeatures = staticFeatures.sample(nSample)    
 
-    allDescriptors = ['standard_value', 'alogp', 'hba', 'hbd', 'psa', 'rtb', 'full_mwt', 'qed_weighted', 'aromatic_rings', 'heavy_atoms', 'number_of_rings', 'smiles_length']
+    #allDescriptors = ['standard_value', 'alogp', 'hba', 'hbd', 'psa', 'rtb', 'full_mwt', 'qed_weighted', 'aromatic_rings', 'heavy_atoms', 'number_of_rings', 'smiles_length']
+    allDescriptors = ['alogp', 'hba', 'hbd', 'psa', 'rtb', 'full_mwt', 'qed_weighted', 'aromatic_rings', 'number_of_rings']
 
+    doPlot = False
     if (doPlot):
         plotIdx = 1
         nRows = np.ceil(len(allDescriptors) / 2)
@@ -488,7 +594,7 @@ def prepareData(dataFile, nSample, doPlot = False):
             sums.append(np.sum(dynamicFeatures[idx, :, :]))
         plt.hist(sums)
 
-    return staticFeatures, dynamicFeatures, char2indices, indices2char
+    return staticFeatures, dynamicFeatures, smilesCodes, char2indices, indices2char
 
 def scaleFeatures(staticFeatures):
 # Choose some subset of dynamicFeatures
@@ -518,23 +624,32 @@ def trainModel(dynamicFeatures, staticFeatures, aeDimensions, modelFile, nEpoch,
     model, history = fitDynamicStatic(dynamicFeatures, staticFeatures, autoencoder, modelFile, nEpoch, nBatch)
     return model, history
 
-def trainModelDynamic(dynamicFeatures, aeDimensions, modelFile, nEpoch, nBatch):
-    lr = 0.01
+def trainModelDynamic(dynamicFeatures, encoderDimensions, decoderDimensions, modelFile, nEpoch, nBatch, lr):
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
-
-    encoder = prepareEncoderDynamic(nCharInSmiles, nCharSet, aeDimensions, lr, True)
-    decoder = prepareDecoderDynamic(nCharInSmiles, nCharSet, aeDimensions, lr, True)
+    decoderChoice = 0
+    variational = True
+    encoder, vae_loss = prepareEncoderCNNDynamic(nCharInSmiles, nCharSet, encoderDimensions, lr, True, True)
+    if decoderChoice == 0:
+        decoder = prepareDecoderCNNDynamic(nCharInSmiles, nCharSet, decoderDimensions, lr, True)
+    elif decoderChoice == 1:
+        decoder = prepareDecoderCNN_LSTMDynamic(nCharInSmiles, nCharSet, decoderDimensions, lr, True)
     encoderOutput = encoder.get_layer('encoderOutput').output
     decoderOutput = decoder(encoderOutput)
     autoencoder = Model(inputs=encoder.input, outputs=decoderOutput)
 
-    optimizer = RMSprop(lr=lr)
-    autoencoder.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['categorical_crossentropy', 'mean_absolute_error', 'accuracy'])
+    #optimizer = RMSprop(lr=lr)
+    optimizer = Adam(lr)
+    if variational:
+        lossF = vae_loss
+    else:
+        loddF = 'categorical_crossentropy'
+
+    autoencoder.compile(optimizer=optimizer, loss=lossF, metrics=['categorical_crossentropy', 'mean_absolute_error', 'accuracy'])
 
     print(autoencoder.summary())
     #model = prepareModelDynamicStatic(dynamicFeatures.shape, staticFeatures.shape, [64,64,64,32], lr, ['binary_crossentropy', 'mean_absolute_error'], True)
-    model, history = fitOnlyDynamic(dynamicFeatures, autoencoder, modelFile, nEpoch, nBatch)
+    model, history = fitOnlyDynamic(dynamicFeatures, autoencoder, modelFile, nEpoch, nBatch, lr)
     return model, history
 
 
@@ -562,9 +677,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    staticFeatures, dynamicFeatures, char2indices, indices2char = prepareData(args.dataFile, args.nSample, doPlot = False)
+    staticFeatures, dynamicFeatures, smilesCodes, char2indices, indices2char = prepareData(args.dataFile, args.nSample, 50, 100, doPlot = False)
 
-    saveFeatures = True
+    saveFeatures = False
     if (saveFeatures):
         with open('staticFeatures.pckl', 'wb') as f:
             pickle.dump(staticFeatures, f)
@@ -583,12 +698,27 @@ if __name__ == '__main__':
     chosenFeatures = ['full_mwt', 'heavy_atoms', 'smiles_length']
     staticFeaturesSlice = staticFeatures[chosenFeatures]
     staticFeaturesSliceScaled, scaler = scaleFeatures(staticFeaturesSlice)
-    aeDimensions = [64,64,32]
-    #model, history = trainModel(dynamicFeatures, staticFeaturesSliceScaled, aeDimensions, args.modelWeightsFile, args.nEpoch, args.nBatch)
-    model, history = trainModelDynamic(dynamicFeatures, aeDimensions, args.modelWeightsFile, args.nEpoch, args.nBatch)
+    
+    lr = 0.00038
+    latentDim = 256
+    convDefinition = {}
+    convDefinition['initialDimWidth'] = 7
+    convDefinition['initialDimDepth'] = 7
+    convDefinition['nCNNlayers'] = 6
+    convDefinition['expansionCoeff'] = 1.2
+    encoderDimensions = [convDefinition, latentDim]
+    decoderDimensions = [latentDim, 1024, 512, 256]
+
+    hyperParameters = {}
+    hyperParameters['latentDim'] = latentDim
+    hyperParameters['convDefinition'] = convDefinition
+    hyperParameters['encoderDimensions'] = encoderDimensions
+    hyperParameters['decoderDimensions'] = decoderDimensions
+    hyperParameters['lr'] = lr
+
+    model, history = trainModelDynamic(dynamicFeatures, encoderDimensions, decoderDimensions, args.modelWeightsFile, args.nEpoch, args.nBatch, lr)
     nCharInSmiles = dynamicFeatures.shape[1]
     nCharSet = dynamicFeatures.shape[2]
     nStatic = staticFeaturesSlice.shape[1]
-    nLatent = aeDimensions[-1]
-    predictiveModel.picklePredictiveModel(args.modelWeightsFile, nCharInSmiles, nCharSet, nStatic, nLatent, scaler, char2indices, indices2char, args.completeModel)
+    predictiveModel.picklePredictiveModel(args.modelWeightsFile, nCharInSmiles, nCharSet, nStatic, latentDim, scaler, char2indices, indices2char, args.completeModel, smilesCodes, hyperParameters)
 

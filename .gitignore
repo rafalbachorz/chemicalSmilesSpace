@@ -6,6 +6,7 @@ __pycache__/
 *.so
 
 # Pickles
+*.pickle
 *.pckl
 *.h5
 
