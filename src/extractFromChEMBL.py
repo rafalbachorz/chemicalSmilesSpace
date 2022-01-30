@@ -84,7 +84,7 @@ if __name__ == '__main__':
     picklesDir = 'pickles/'
     DBread = False
     if DBread:
-        connection = connect2DB()
+        connection = connect2DB(port='16001', database='chembl_28')
         molData = getSmilesWithActivity(connection)
         connection.close()
         molData.to_pickle(picklesDir+'molDataRaw.pkl')
